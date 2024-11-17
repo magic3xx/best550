@@ -9,8 +9,16 @@ def create_app():
     
     db.init_app(app)
     
+    # Ensure the database directory exists
+    import os
+    os.makedirs('/tmp', exist_ok=True)
+    
+    # Create tables within application context
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as e:
+            app.logger.error(f"Database initialization error: {str(e)}")
     
     app.register_blueprint(api, url_prefix='/api')
     
