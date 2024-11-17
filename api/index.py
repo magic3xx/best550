@@ -1,9 +1,18 @@
 from flask import Flask, request, jsonify, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 import os
+import logging
+from .models import db, License
 
 app = Flask(__name__)
+
+# Configure logging
+if __name__ != '__main__':
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+else:
+    app.logger.setLevel(logging.INFO)
 
 # Configure database
 database_url = os.environ.get('DATABASE_URL')
@@ -15,24 +24,22 @@ else:
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///licenses.db'
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+db.init_app(app)
 
-class License(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(50), unique=True, nullable=False)
-    active = db.Column(db.Boolean, default=True)
-    expiration_date = db.Column(db.DateTime, nullable=False)
-    subscription_type = db.Column(db.String(20), nullable=False)
-    support_name = db.Column(db.String(50))
-    device_id = db.Column(db.String(50))
-    activated = db.Column(db.Boolean, default=False)
-    key_type = db.Column(db.String(20), nullable=False)
-    multi_device = db.Column(db.Boolean, default=False)
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+@app.route('/')
+def serve_app():
+    return send_from_directory('.', 'index.html')
 
 @app.route('/api/licenses', methods=['GET'])
 def list_licenses():
     try:
+        app.logger.info("Attempting to fetch licenses")
         licenses = License.query.all()
+        app.logger.info(f"Successfully fetched {len(licenses)} licenses")
         return jsonify([{
             'id': license.id,
             'key': license.key,
@@ -46,11 +53,13 @@ def list_licenses():
             'multi_device': license.multi_device
         } for license in licenses])
     except Exception as e:
+        app.logger.error(f"Error fetching licenses: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/add_license', methods=['POST'])
 def add_license():
     try:
+        app.logger.info("Received add license request")
         data = request.json
         now = datetime.now()
         
@@ -80,56 +89,69 @@ def add_license():
         
         db.session.add(new_license)
         db.session.commit()
+        app.logger.info(f"Successfully added license with key: {data['key']}")
         return jsonify({'message': 'License added successfully'}), 201
     except Exception as e:
+        app.logger.error(f"Error adding license: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/toggle_active/<int:id>', methods=['POST'])
 def toggle_active(id):
     try:
+        app.logger.info(f"Attempting to toggle license with id: {id}")
         license = License.query.get(id)
         if license:
             license.active = not license.active
             db.session.commit()
+            app.logger.info(f"Successfully toggled license with id: {id}")
             return jsonify({'message': 'License status toggled successfully'}), 200
         return jsonify({'message': 'License not found'}), 404
     except Exception as e:
+        app.logger.error(f"Error toggling license: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/delete_license/<int:id>', methods=['DELETE'])
 def delete_license(id):
     try:
+        app.logger.info(f"Attempting to delete license with id: {id}")
         license = License.query.get(id)
         if license:
             db.session.delete(license)
             db.session.commit()
+            app.logger.info(f"Successfully deleted license with id: {id}")
             return jsonify({'message': 'License deleted successfully'}), 200
         return jsonify({'message': 'License not found'}), 404
     except Exception as e:
+        app.logger.error(f"Error deleting license: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/reset_key', methods=['POST'])
 def reset_key():
     try:
         data = request.json
+        app.logger.info(f"Attempting to reset key: {data['key']}")
         license = License.query.filter_by(key=data['key']).first()
         if license:
             license.device_id = None
             license.activated = False
             db.session.commit()
+            app.logger.info(f"Successfully reset key: {data['key']}")
             return jsonify({'message': 'Key reset successfully'}), 200
         return jsonify({'message': 'License not found'}), 404
     except Exception as e:
+        app.logger.error(f"Error resetting key: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/check_key_details', methods=['POST'])
 def check_key_details():
     try:
         data = request.json
+        app.logger.info(f"Checking key details for: {data['key']}")
         license = License.query.filter_by(key=data['key']).first()
         
         if license:
             if license.activated and not license.multi_device and license.device_id != data['device_id']:
+                app.logger.warning(f"Key {data['key']} is already used on another device")
                 return jsonify({'valid': False, 'reason': 'This key is already used on another device.'})
 
             if not license.activated or license.multi_device:
@@ -142,6 +164,7 @@ def check_key_details():
                 remaining_time = license.expiration_date - datetime.now()
                 remaining_minutes = (remaining_time.days * 24 * 60) + (remaining_time.seconds // 60)
 
+                app.logger.info(f"Successfully validated key: {data['key']}")
                 return jsonify({
                     'valid': True,
                     'expiration_date': license.expiration_date.strftime('%Y-%m-%d'),
@@ -154,9 +177,12 @@ def check_key_details():
                     },
                     'multi_device': license.multi_device
                 })
+            app.logger.warning(f"Key {data['key']} is inactive or expired")
             return jsonify({'valid': False, 'reason': 'The key is either inactive or expired.'})
+        app.logger.warning(f"Key not found: {data['key']}")
         return jsonify({'valid': False, 'reason': 'Key not found.'})
     except Exception as e:
+        app.logger.error(f"Error checking key details: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
