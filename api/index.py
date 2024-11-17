@@ -1,16 +1,16 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from .config import Config
 from .models import db
 from .routes import api
+import os
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder='../dist')
     app.config.from_object(Config)
     
     db.init_app(app)
     
     # Ensure the database directory exists
-    import os
     os.makedirs('/tmp', exist_ok=True)
     
     # Create tables within application context
@@ -22,9 +22,12 @@ def create_app():
     
     app.register_blueprint(api, url_prefix='/api')
     
-    @app.route('/')
-    def home():
-        return jsonify({"message": "License Manager API"})
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve(path):
+        if path and os.path.exists(app.static_folder + '/' + path):
+            return send_from_directory(app.static_folder, path)
+        return send_from_directory(app.static_folder, 'index.html')
     
     return app
 
