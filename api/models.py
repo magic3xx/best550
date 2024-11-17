@@ -1,3 +1,4 @@
+from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
@@ -13,3 +14,17 @@ class License(db.Model):
     activated = db.Column(db.Boolean, default=False)
     key_type = db.Column(db.String(20), nullable=False)
     multi_device = db.Column(db.Boolean, default=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'key': self.key,
+            'active': self.active,
+            'expiration_date': self.expiration_date.isoformat(),
+            'subscription_type': self.subscription_type,
+            'support_name': self.support_name,
+            'device_id': self.device_id,
+            'activated': self.activated,
+            'key_type': self.key_type,
+            'multi_device': self.multi_device
+        }
